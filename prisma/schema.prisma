@@ -1,0 +1,151 @@
+// TripPay schema — trips, itineraries, multi-currency expense splitting, settlements.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum TripRole {
+  ORGANIZER
+  MEMBER
+}
+
+enum SplitType {
+  EQUAL
+  UNEQUAL
+  SHARES
+  PERCENT
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  createdAt    DateTime @default(now())
+
+  memberships       TripMember[]
+  createdTrips      Trip[]              @relation("TripCreator")
+  paidExpenses      Expense[]           @relation("ExpensePayer")
+  expenseSplits     ExpenseSplit[]
+  itineraryItems    ItineraryItem[]     @relation("ItineraryCreator")
+  itineraryAttended ItineraryAttendee[]
+  settlementsFrom   Settlement[]        @relation("SettlementFrom")
+  settlementsTo     Settlement[]        @relation("SettlementTo")
+}
+
+model Trip {
+  id           String   @id @default(cuid())
+  name         String
+  description  String?
+  destination  String?
+  baseCurrency String   @default("USD")
+  startDate    DateTime?
+  endDate      DateTime?
+  inviteToken  String   @unique
+  createdById  String
+  createdAt    DateTime @default(now())
+
+  createdBy   User            @relation("TripCreator", fields: [createdById], references: [id])
+  members     TripMember[]
+  itinerary   ItineraryItem[]
+  expenses    Expense[]
+  settlements Settlement[]
+}
+
+model TripMember {
+  id       String   @id @default(cuid())
+  tripId   String
+  userId   String
+  role     TripRole @default(MEMBER)
+  joinedAt DateTime @default(now())
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tripId, userId])
+}
+
+model ItineraryItem {
+  id          String   @id @default(cuid())
+  tripId      String
+  title       String
+  location    String?
+  notes       String?
+  startsAt    DateTime
+  endsAt      DateTime?
+  createdById String
+  createdAt   DateTime @default(now())
+
+  trip      Trip                @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  createdBy User                @relation("ItineraryCreator", fields: [createdById], references: [id])
+  attendees ItineraryAttendee[]
+  expenses  Expense[]
+}
+
+model ItineraryAttendee {
+  itineraryItemId String
+  userId          String
+
+  itineraryItem ItineraryItem @relation(fields: [itineraryItemId], references: [id], onDelete: Cascade)
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([itineraryItemId, userId])
+}
+
+model Expense {
+  id              String    @id @default(cuid())
+  tripId          String
+  paidById        String
+  description     String
+  // Stored in cents of the expense's own currency.
+  amountCents     Int
+  currency        String
+  // FX multiplier from expense currency to the trip's base currency (e.g. EUR->USD = 1.08).
+  fxRate          Float     @default(1)
+  // Pre-computed amount in the trip's base currency (cents) for fast balance math.
+  baseAmountCents Int
+  date            DateTime  @default(now())
+  splitType       SplitType
+  itineraryItemId String?
+  createdAt       DateTime  @default(now())
+
+  trip          Trip           @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  paidBy        User           @relation("ExpensePayer", fields: [paidById], references: [id])
+  itineraryItem ItineraryItem? @relation(fields: [itineraryItemId], references: [id], onDelete: SetNull)
+  splits        ExpenseSplit[]
+}
+
+model ExpenseSplit {
+  id              String  @id @default(cuid())
+  expenseId       String
+  userId          String
+  // Share of the expense in the trip's base currency (cents). Always populated.
+  baseAmountCents Int
+  // Optional inputs preserved so the form can be edited later.
+  shares          Float?
+  percent         Float?
+
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([expenseId, userId])
+}
+
+model Settlement {
+  id              String   @id @default(cuid())
+  tripId          String
+  fromUserId      String
+  toUserId        String
+  baseAmountCents Int
+  note            String?
+  settledAt       DateTime @default(now())
+
+  trip     Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  fromUser User @relation("SettlementFrom", fields: [fromUserId], references: [id])
+  toUser   User @relation("SettlementTo", fields: [toUserId], references: [id])
+}
